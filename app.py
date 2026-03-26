@@ -58,98 +58,107 @@ SYSTEM_PROMPT_WITH_CONTEXT = SYSTEM_PROMPT + """
 """
 
 # ──────────────────────────────────────────────
+# 내부 설정 (사용자에게 노출하지 않음)
+# ──────────────────────────────────────────────
+TEMPERATURE = 0.3
+USE_RAG = True
+
+has_openai = bool(st.secrets.get("OPENAI_API_KEY"))
+has_claude = bool(st.secrets.get("ANTHROPIC_API_KEY"))
+has_gemini = bool(st.secrets.get("GOOGLE_API_KEY"))
+
+# ──────────────────────────────────────────────
 # 벡터 DB 초기화 (앱 시작 시 1회)
 # ──────────────────────────────────────────────
-@st.cache_resource(show_spinner="📚 암정보 자료를 불러오는 중...")
+@st.cache_resource(show_spinner=False)
 def init_vector_store():
     return build_vector_store()
 
-
 vector_store = init_vector_store()
+doc_count = vector_store.count() if vector_store else 0
 
 # ──────────────────────────────────────────────
-# 사이드바
+# 암종별 주요 질문
 # ──────────────────────────────────────────────
-with st.sidebar:
-    st.header("🏥 암 건강 상담 챗봇")
-
-    # API 연결 상태
-    st.subheader("🔌 AI 모델 연결 상태")
-    has_openai = bool(st.secrets.get("OPENAI_API_KEY"))
-    has_claude = bool(st.secrets.get("ANTHROPIC_API_KEY"))
-    has_gemini = bool(st.secrets.get("GOOGLE_API_KEY"))
-
-    st.markdown(f"- {'✅' if has_openai else '❌'} OpenAI GPT (1순위)")
-    st.markdown(f"- {'✅' if has_claude else '❌'} Claude (2순위)")
-    st.markdown(f"- {'✅' if has_gemini else '❌'} Gemini (3순위)")
-
-    if not any([has_openai, has_claude, has_gemini]):
-        st.error("⚠️ API 키가 설정되지 않았습니다.\n\n`.streamlit/secrets.toml`을 확인하세요.")
-
-    st.divider()
-
-    # RAG 상태
-    st.subheader("📚 참고자료 상태")
-    doc_count = vector_store.count() if vector_store else 0
-    if doc_count > 0:
-        st.success(f"✅ {doc_count}개 문서 청크 로드됨")
-    else:
-        st.warning(
-            "📂 data/ 폴더에 .txt 파일을 넣어주세요.\n\n"
-            "`python fetch_cancer_info.py` 실행 시\n"
-            "국립암센터 자료가 자동 수집됩니다."
-        )
-
-    if st.button("🔄 자료 다시 불러오기"):
-        st.cache_resource.clear()
-        st.rerun()
-
-    st.divider()
-
-    temperature = st.slider(
-        "Temperature", 0.0, 1.0, 0.3, 0.1,
-        help="낮을수록 정확, 높을수록 창의적",
-    )
-    use_rag = st.toggle("📚 참고자료 활용 (RAG)", value=True)
-
-    st.divider()
-    st.caption("ℹ️ 이 챗봇은 의료 정보 제공 목적이며,\n전문 의료 상담을 대체하지 않습니다.")
-
-    if st.button("🗑️ 대화 초기화"):
-        st.session_state.messages = []
-        st.rerun()
+CANCER_TOPICS = {
+    "🫁 위암": [
+        "위암 검진은 몇 살부터 받나요?",
+        "위내시경 검사 전 준비사항은?",
+        "위암의 초기 증상은 무엇인가요?",
+    ],
+    "🫀 대장암": [
+        "대장암 검진은 어떻게 하나요?",
+        "분변잠혈검사에서 양성이 나왔어요",
+        "대장내시경 전 준비사항이 궁금해요",
+    ],
+    "🫁 간암": [
+        "간암 검진 대상은 누구인가요?",
+        "B형간염 보유자인데 검진 주기는?",
+        "간암의 위험 요인은 무엇인가요?",
+    ],
+    "🎀 유방암": [
+        "유방암 자가검진은 어떻게 하나요?",
+        "유방촬영술(맘모그래피)은 어떤 검사인가요?",
+        "치밀유방이란 무엇인가요?",
+    ],
+    "🩺 자궁경부암": [
+        "자궁경부암 검진은 몇 살부터 받나요?",
+        "HPV 백신은 언제 맞아야 하나요?",
+        "자궁경부세포검사 전 주의사항은?",
+    ],
+    "💨 폐암": [
+        "폐암 검진 대상은 누구인가요?",
+        "저선량 흉부CT는 어떤 검사인가요?",
+        "갑년(pack-year) 계산은 어떻게 하나요?",
+    ],
+}
 
 # ──────────────────────────────────────────────
 # 메인 UI
 # ──────────────────────────────────────────────
-st.title("🏥 암 건강 상담 챗봇")
-st.caption("국립암센터 암정보센터 자료 기반 · AI 건강 정보 제공")
+st.title("🏥 암 건강 상담 chatbot")
+st.caption("국립암센터 암정보센터 자료 기반 · 건강 정보 제공")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# 대화 이력 표시
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-
-# 예시 질문
+# ──────────────────────────────────────────────
+# 초기 화면: 암종별 버튼
+# ──────────────────────────────────────────────
 if not st.session_state.messages:
-    st.markdown("#### 💡 이런 질문을 해보세요")
-    cols = st.columns(2)
-    examples = [
-        "국가암검진은 어떤 암을 검사하나요?",
-        "대장내시경 전 준비사항이 궁금해요",
-        "유방암 자가검진은 어떻게 하나요?",
-        "폐암 검진 대상은 누구인가요?",
-    ]
-    for i, ex in enumerate(examples):
-        with cols[i % 2]:
-            if st.button(ex, key=f"ex_{i}", use_container_width=True):
-                st.session_state.messages.append({"role": "user", "content": ex})
-                st.rerun()
+    st.markdown("#### 궁금한 암종을 선택하세요")
 
+    # 암종 선택 탭
+    tabs = st.tabs(list(CANCER_TOPICS.keys()))
+
+    for tab, (cancer_name, questions) in zip(tabs, CANCER_TOPICS.items()):
+        with tab:
+            for q in questions:
+                if st.button(q, key=f"q_{cancer_name}_{q}", use_container_width=True):
+                    st.session_state.messages.append({"role": "user", "content": q})
+                    st.rerun()
+
+    st.divider()
+    st.markdown("#### 💬 또는 직접 질문을 입력하세요")
+
+# ──────────────────────────────────────────────
+# 대화 중: 대화 초기화 버튼
+# ──────────────────────────────────────────────
+if st.session_state.messages:
+    col_spacer, col_btn = st.columns([4, 1])
+    with col_btn:
+        if st.button("🗑️ 초기화", use_container_width=True):
+            st.session_state.messages = []
+            st.rerun()
+
+# ──────────────────────────────────────────────
 # 사용자 입력
+# ──────────────────────────────────────────────
 if prompt := st.chat_input("암 관련 질문을 입력하세요..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -160,7 +169,7 @@ if prompt := st.chat_input("암 관련 질문을 입력하세요..."):
 # ──────────────────────────────────────────────
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     if not any([has_openai, has_claude, has_gemini]):
-        st.warning("⬅️ API 키를 먼저 설정해 주세요.")
+        st.error("⚠️ 현재 서비스 점검 중입니다. 잠시 후 다시 시도해 주세요.")
         st.stop()
 
     user_query = st.session_state.messages[-1]["content"]
@@ -170,7 +179,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             # RAG 검색
             context_text = ""
             results = []
-            if use_rag and doc_count > 0:
+            if USE_RAG and doc_count > 0:
                 results = search(user_query)
                 context_text = format_context(results)
 
@@ -189,19 +198,18 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
             # LLM 호출
             response_text, model_used = get_llm_response(
-                api_messages, temperature=temperature
+                api_messages, temperature=TEMPERATURE
             )
 
             st.markdown(response_text)
-
-            # 참고자료 출처
-            if context_text and results:
-                sources = list(set(r["source"] for r in results))
-                with st.expander("📚 참고한 자료"):
-                    for src in sources:
-                        st.markdown(f"- `{src}`")
 
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": response_text,
             })
+
+# ──────────────────────────────────────────────
+# 하단 고정 안내
+# ──────────────────────────────────────────────
+st.divider()
+st.caption("ℹ️ 이 챗봇은 의료 정보 제공 목적이며, 전문 의료 상담을 대체하지 않습니다. 정확한 진단 및 치료는 의료기관을 방문하세요.")

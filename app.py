@@ -116,8 +116,8 @@ CANCER_TOPICS = {
 # ──────────────────────────────────────────────
 # 메인 UI
 # ──────────────────────────────────────────────
-st.title("🏥 암 건강 상담 chatbot")
-st.caption("국립암센터 암정보센터 자료 기반 · 건강 정보 제공")
+st.title("🏥 암 건강 상담 챗봇")
+st.caption("국립암센터 암정보센터 자료 기반 · AI 건강 정보 제공")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -180,7 +180,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             context_text = ""
             results = []
             if USE_RAG and doc_count > 0:
-                results = search(user_query)
+                results = search(vector_store, user_query)
                 context_text = format_context(results)
 
             # 시스템 프롬프트
